@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: true
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          VERSION="${{ github.ref_name }}"
+          LDFLAGS="-s -w -X main.version=${VERSION}"
+          declare -A TARGETS=(
+            ["linux/amd64"]="miniclaw_linux_amd64"
+            ["linux/arm64"]="miniclaw_linux_arm64"
+            ["darwin/amd64"]="miniclaw_darwin_amd64"
+            ["darwin/arm64"]="miniclaw_darwin_arm64"
+            ["windows/amd64"]="miniclaw_windows_amd64.exe"
+            ["windows/arm64"]="miniclaw_windows_arm64.exe"
+          )
+          for TARGET in "${!TARGETS[@]}"; do
+            GOOS="${TARGET%/*}"
+            GOARCH="${TARGET#*/}"
+            OUT="dist/${TARGETS[$TARGET]}"
+            echo "→ Building $OUT (${GOOS}/${GOARCH})"
+            GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="${LDFLAGS}" -trimpath -o "$OUT" ./cmd/miniclaw/
+          done
+          ls -lh dist/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          {
+            echo "notes<<EOF"
+            echo "## What's Changed"
+            echo ""
+            if [ -n "$PREV" ]; then
+              git log --pretty=format:"- %s (%h)" "${PREV}..HEAD"
+            else
+              echo "- Initial release 🐾"
+            fi
+            echo ""
+            echo ""
+            echo "## Binaries"
+            echo ""
+            echo "| Platform | File |"
+            echo "|----------|------|"
+            echo "| Linux amd64 | \`miniclaw_linux_amd64\` |"
+            echo "| Linux arm64 | \`miniclaw_linux_arm64\` |"
+            echo "| macOS amd64 | \`miniclaw_darwin_amd64\` |"
+            echo "| macOS arm64 (Apple Silicon) | \`miniclaw_darwin_arm64\` |"
+            echo "| Windows amd64 | \`miniclaw_windows_amd64.exe\` |"
+            echo "| Windows arm64 | \`miniclaw_windows_arm64.exe\` |"
+            echo ""
+            echo "**Quick start:**"
+            echo "\`\`\`bash"
+            echo "chmod +x miniclaw_linux_amd64"
+            echo "./miniclaw_linux_amd64 onboard"
+            echo "./miniclaw_linux_amd64 provider login"
+            echo "./miniclaw_linux_amd64 gateway"
+            echo "\`\`\`"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.notes }}
+          files: dist/*
+          fail_on_unmatched_files: true
