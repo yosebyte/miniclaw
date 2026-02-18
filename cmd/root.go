@@ -28,4 +28,5 @@ func init() {
 	rootCmd.AddCommand(agentCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(providerCmd)
+	rootCmd.AddCommand(cronCmd)
 }

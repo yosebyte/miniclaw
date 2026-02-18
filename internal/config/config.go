@@ -10,9 +10,10 @@ import (
 
 // Config is the root configuration for miniclaw.
 type Config struct {
-	Provider ProviderConfig  `json:"provider"`
-	Telegram TelegramConfig  `json:"telegram"`
-	Workspace string         `json:"workspace"`
+	Provider  ProviderConfig  `json:"provider"`
+	Telegram  TelegramConfig  `json:"telegram"`
+	Heartbeat HeartbeatConfig `json:"heartbeat"`
+	Workspace string          `json:"workspace"`
 }
 
 // ProviderConfig holds Claude provider settings.
@@ -32,6 +33,13 @@ type TelegramConfig struct {
 	AllowFrom []string `json:"allowFrom"`
 }
 
+// HeartbeatConfig controls the proactive heartbeat.
+type HeartbeatConfig struct {
+	Enabled         bool   `json:"enabled"`
+	IntervalMinutes int    `json:"intervalMinutes"`
+	ChatID          string `json:"chatId"` // Telegram chat_id to send proactive messages to
+}
+
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -42,6 +50,7 @@ func DefaultConfig() *Config {
 			MemoryWindow:  50,
 		},
 		Telegram:  TelegramConfig{AllowFrom: []string{}},
+		Heartbeat: HeartbeatConfig{Enabled: true, IntervalMinutes: 30},
 		Workspace: "~/.miniclaw/workspace",
 	}
 }
@@ -87,11 +96,17 @@ func (c *Config) WorkspacePath() string {
 	if c.Workspace == "" {
 		c.Workspace = "~/.miniclaw/workspace"
 	}
-	if c.Workspace[:2] == "~/" {
+	if len(c.Workspace) >= 2 && c.Workspace[:2] == "~/" {
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, c.Workspace[2:])
 	}
 	return c.Workspace
+}
+
+// CronPath returns the path for persisted cron jobs.
+func CronPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".miniclaw", "cron.json")
 }
 
 // IsAuthenticated reports whether a valid credential is present.

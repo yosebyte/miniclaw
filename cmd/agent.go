@@ -44,7 +44,7 @@ func init() {
 }
 
 func runOnce(ctx context.Context, loop *agent.Loop, msg string) error {
-	resp, err := loop.ProcessMessage(ctx, "cli:direct", msg)
+	resp, err := loop.ProcessMessage(ctx, "cli:direct", "", msg)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func runInteractive(ctx context.Context, loop *agent.Loop) error {
 			break
 		}
 
-		resp, err := loop.ProcessMessage(ctx, "cli:direct", line)
+		resp, err := loop.ProcessMessage(ctx, "cli:direct", "", line)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			continue

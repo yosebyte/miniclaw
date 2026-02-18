@@ -13,39 +13,80 @@ import (
 	"github.com/yosebyte/miniclaw/internal/tools"
 )
 
+// SendFunc sends a message to a chat (Telegram).
+type SendFunc func(chatID, text string) error
+
+// CronService is the interface the loop needs from the cron service.
+type CronService interface {
+	AddJob(name, schedule, message, chatID string) error
+	Remove(id string) error
+	ListFormatted() string
+}
+
 // Loop is the core agent processing engine.
 type Loop struct {
 	cfg      *config.Config
 	claude   *provider.Claude
 	sessions *SessionManager
 	memory   *MemoryStore
-	tools    *tools.Registry
+	reg      *tools.Registry
+
+	// mutable context updated per-message so tools can route replies
+	currentChatID string
+	sendFn        SendFunc
+	cronSvc       CronService
 }
 
-// NewLoop creates a Loop, initialising the tool registry and memory store.
+// NewLoop creates a Loop. Call SetSendFunc and SetCronService before starting.
 func NewLoop(cfg *config.Config, claude *provider.Claude) *Loop {
 	workspace := cfg.WorkspacePath()
 	sessDir := filepath.Join(filepath.Dir(workspace), "sessions")
 
-	reg := tools.NewRegistry()
-	reg.Register(tools.ReadFileTool{})
-	reg.Register(tools.WriteFileTool{})
-	reg.Register(tools.EditFileTool{})
-	reg.Register(tools.ListDirTool{})
-	reg.Register(tools.ExecTool{})
-	reg.Register(tools.NewWebFetchTool())
-
-	return &Loop{
+	l := &Loop{
 		cfg:      cfg,
 		claude:   claude,
 		sessions: NewSessionManager(sessDir),
 		memory:   NewMemoryStore(workspace),
-		tools:    reg,
+		reg:      tools.NewRegistry(),
+	}
+	l.registerBaseTools()
+	return l
+}
+
+// SetSendFunc sets the send callback and registers the send_message tool.
+func (l *Loop) SetSendFunc(sendFn SendFunc) {
+	l.sendFn = sendFn
+	if sendFn != nil {
+		l.reg.Register(tools.NewSendMessageTool(&l.currentChatID, sendFn))
 	}
 }
 
+// SetCronService registers cron tools into the loop.
+func (l *Loop) SetCronService(cronSvc CronService) {
+	l.cronSvc = cronSvc
+	if cronSvc != nil {
+		addFn := func(name, schedule, message, chatID string) error {
+			return cronSvc.AddJob(name, schedule, message, chatID)
+		}
+		l.reg.Register(tools.NewCronAddTool(&l.currentChatID, addFn))
+		l.reg.Register(tools.NewCronListTool(cronSvc.ListFormatted))
+		l.reg.Register(tools.NewCronRemoveTool(cronSvc.Remove))
+	}
+}
+
+func (l *Loop) registerBaseTools() {
+	l.reg.Register(tools.ReadFileTool{})
+	l.reg.Register(tools.WriteFileTool{})
+	l.reg.Register(tools.EditFileTool{})
+	l.reg.Register(tools.ListDirTool{})
+	l.reg.Register(tools.ExecTool{})
+	l.reg.Register(tools.NewWebFetchTool())
+}
+
 // ProcessMessage handles one inbound message and returns the assistant reply.
-func (l *Loop) ProcessMessage(ctx context.Context, sessionKey, userMsg string) (string, error) {
+// chatID is used for tool routing (send_message, cron_add).
+func (l *Loop) ProcessMessage(ctx context.Context, sessionKey, chatID, userMsg string) (string, error) {
+	l.currentChatID = chatID
 	session := l.sessions.Get(sessionKey)
 
 	switch strings.TrimSpace(strings.ToLower(userMsg)) {
@@ -99,7 +140,7 @@ func (l *Loop) runLoop(ctx context.Context, system string, messages []provider.M
 	if maxIter == 0 {
 		maxIter = 20
 	}
-	toolDefs := l.tools.Definitions()
+	toolDefs := l.reg.Definitions()
 	var toolsUsed []string
 
 	for range maxIter {
@@ -124,13 +165,11 @@ func (l *Loop) runLoop(ctx context.Context, system string, messages []provider.M
 			return textContent, toolsUsed, nil
 		}
 
-		// Append assistant message with embedded tool call content
 		messages = append(messages, provider.Message{
 			Role:    "assistant",
 			Content: resp.Content,
 		})
 
-		// Execute each tool call and collect results
 		var toolResults []provider.ContentBlock
 		for _, tc := range toolCalls {
 			toolsUsed = append(toolsUsed, tc.Name)
@@ -140,7 +179,7 @@ func (l *Loop) runLoop(ctx context.Context, system string, messages []provider.M
 			}
 			slog.Info("tool call", "name", tc.Name, "input", input)
 
-			result, execErr := l.tools.Execute(ctx, tc.Name, tc.Input)
+			result, execErr := l.reg.Execute(ctx, tc.Name, tc.Input)
 			isError := false
 			if execErr != nil {
 				result = "Error: " + execErr.Error()

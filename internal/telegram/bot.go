@@ -23,9 +23,14 @@ type Bot struct {
 	typing sync.Map // chat_id(int64) -> context.CancelFunc
 }
 
-// New creates a Bot.
+// New creates a Bot. Call SetLoop before Run.
 func New(cfg *config.Config, loop *agent.Loop) *Bot {
 	return &Bot{cfg: cfg, loop: loop}
+}
+
+// SetLoop sets the agent loop (used when loop is created after bot).
+func (b *Bot) SetLoop(loop *agent.Loop) {
+	b.loop = loop
 }
 
 // Run starts long polling and blocks until ctx is cancelled.
@@ -117,7 +122,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	b.typing.Store(chatID, typingCancel)
 	go b.typingLoop(typingCtx, chatID)
 
-	response, err := b.loop.ProcessMessage(ctx, sessionKey, text)
+	response, err := b.loop.ProcessMessage(ctx, sessionKey, fmt.Sprintf("%d", chatID), text)
 
 	typingCancel()
 	b.typing.Delete(chatID)
@@ -171,6 +176,19 @@ func (b *Bot) sendText(chatID int64, content string) {
 			}
 		}
 	}
+}
+
+// Send delivers a message to a chat by ID string (used by cron and heartbeat).
+func (b *Bot) Send(chatID, text string) error {
+	if b.api == nil {
+		return fmt.Errorf("bot not running")
+	}
+	id := int64(0)
+	if _, err := fmt.Sscanf(chatID, "%d", &id); err != nil {
+		return fmt.Errorf("invalid chat_id %q: %w", chatID, err)
+	}
+	b.sendText(id, text)
+	return nil
 }
 
 func (b *Bot) isAllowed(user *tgbotapi.User) bool {
