@@ -4,7 +4,7 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -22,10 +22,9 @@ type Loop struct {
 	tools    *tools.Registry
 }
 
-// NewLoop creates a Loop, initialising the tool registry and memory.
+// NewLoop creates a Loop, initialising the tool registry and memory store.
 func NewLoop(cfg *config.Config, claude *provider.Claude) *Loop {
 	workspace := cfg.WorkspacePath()
-	// Sessions live one level above workspace for easier access
 	sessDir := filepath.Join(filepath.Dir(workspace), "sessions")
 
 	reg := tools.NewRegistry()
@@ -55,8 +54,7 @@ func (l *Loop) ProcessMessage(ctx context.Context, sessionKey, userMsg string) (
 		session.Clear()
 		_ = l.sessions.Save(session)
 		go func() {
-			bgCtx := context.Background()
-			l.memory.Consolidate(bgCtx, l.claude, &old, l.memWindow())
+			l.memory.Consolidate(context.Background(), l.claude, &old, l.memWindow())
 		}()
 		return "New session started. Memory consolidation in progress.", nil
 	case "/help":
@@ -66,10 +64,9 @@ func (l *Loop) ProcessMessage(ctx context.Context, sessionKey, userMsg string) (
 	memWindow := l.memWindow()
 	if len(session.Messages) > memWindow {
 		go func() {
-			bgCtx := context.Background()
-			snapSession := *session
-			l.memory.Consolidate(bgCtx, l.claude, &snapSession, memWindow)
-			session.LastConsolidated = snapSession.LastConsolidated
+			snap := *session
+			l.memory.Consolidate(context.Background(), l.claude, &snap, memWindow)
+			session.LastConsolidated = snap.LastConsolidated
 			_ = l.sessions.Save(session)
 		}()
 	}
@@ -105,7 +102,7 @@ func (l *Loop) runLoop(ctx context.Context, system string, messages []provider.M
 	toolDefs := l.tools.Definitions()
 	var toolsUsed []string
 
-	for i := 0; i < maxIter; i++ {
+	for range maxIter {
 		resp, err := l.claude.Chat(ctx, system, messages, toolDefs)
 		if err != nil {
 			return "", toolsUsed, fmt.Errorf("LLM error: %w", err)
@@ -127,13 +124,13 @@ func (l *Loop) runLoop(ctx context.Context, system string, messages []provider.M
 			return textContent, toolsUsed, nil
 		}
 
-		// Append assistant message (with tool calls as content blocks)
+		// Append assistant message with embedded tool call content
 		messages = append(messages, provider.Message{
 			Role:    "assistant",
 			Content: resp.Content,
 		})
 
-		// Execute tool calls and collect results
+		// Execute each tool call and collect results
 		var toolResults []provider.ContentBlock
 		for _, tc := range toolCalls {
 			toolsUsed = append(toolsUsed, tc.Name)
@@ -141,14 +138,14 @@ func (l *Loop) runLoop(ctx context.Context, system string, messages []provider.M
 			if len(input) > 200 {
 				input = input[:200] + "..."
 			}
-			log.Printf("[INFO] tool call; name=%s input=%s", tc.Name, input)
+			slog.Info("tool call", "name", tc.Name, "input", input)
 
 			result, execErr := l.tools.Execute(ctx, tc.Name, tc.Input)
 			isError := false
 			if execErr != nil {
 				result = "Error: " + execErr.Error()
 				isError = true
-				log.Printf("[WARN] tool error; name=%s err=%v", tc.Name, execErr)
+				slog.Warn("tool error", "name", tc.Name, "err", execErr)
 			}
 
 			toolResults = append(toolResults, provider.ContentBlock{

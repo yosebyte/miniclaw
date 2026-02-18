@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -31,7 +31,7 @@ type Message struct {
 	Content interface{} `json:"content"` // string or []ContentBlock
 }
 
-// ContentBlock is a typed content item (text or tool_use or tool_result).
+// ContentBlock is a typed content item (text, tool_use, or tool_result).
 type ContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -105,7 +105,7 @@ func (c *Claude) Chat(ctx context.Context, system string, messages []Message, to
 	resp, err := c.doRequest(ctx, req)
 	if err != nil {
 		if isUnauthorized(err) && c.cfg.Provider.RefreshToken != "" {
-			log.Printf("[INFO] access token expired, refreshing")
+			slog.Info("access token expired, refreshing")
 			newAccess, newRefresh, rerr := RefreshAccessToken(ctx, c.cfg.Provider.RefreshToken)
 			if rerr != nil {
 				return nil, fmt.Errorf("token refresh failed: %w", rerr)
@@ -115,7 +115,7 @@ func (c *Claude) Chat(ctx context.Context, system string, messages []Message, to
 				c.cfg.Provider.RefreshToken = newRefresh
 			}
 			if serr := config.Save(c.cfg); serr != nil {
-				log.Printf("[WARN] could not persist refreshed token: %v", serr)
+				slog.Warn("could not persist refreshed token", "err", serr)
 			}
 			return c.doRequest(ctx, req)
 		}

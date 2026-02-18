@@ -8,7 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -169,7 +169,7 @@ func doTokenRequest(ctx context.Context, form url.Values) (*OAuthTokenResponse, 
 	if tok.Error != "" {
 		return nil, fmt.Errorf("token error: %s - %s", tok.Error, tok.ErrorDesc)
 	}
-	log.Printf("[INFO] OAuth token obtained; token_type=%s expires_in=%d", tok.TokenType, tok.ExpiresIn)
+	slog.Info("OAuth token obtained", "token_type", tok.TokenType, "expires_in", tok.ExpiresIn)
 	return &tok, nil
 }
 
@@ -209,6 +209,6 @@ func openBrowser(urlStr string) {
 		args = []string{urlStr}
 	}
 	if err := exec.Command(cmd, args...).Start(); err != nil {
-		log.Printf("[DEBUG] could not open browser automatically: %v", err)
+		slog.Debug("could not open browser automatically", "err", err)
 	}
 }

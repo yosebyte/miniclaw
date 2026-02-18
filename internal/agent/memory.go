@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,12 +14,12 @@ import (
 	"github.com/yosebyte/miniclaw/internal/provider"
 )
 
-// MemoryStore manages MEMORY.md and HISTORY.md.
+// MemoryStore manages MEMORY.md and HISTORY.md in the workspace.
 type MemoryStore struct {
 	workspace string
 }
 
-// NewMemoryStore creates a MemoryStore for the given workspace dir.
+// NewMemoryStore creates a MemoryStore for the given workspace directory.
 func NewMemoryStore(workspace string) *MemoryStore {
 	return &MemoryStore{workspace: workspace}
 }
@@ -88,6 +88,11 @@ func (m *MemoryStore) Consolidate(ctx context.Context, claude *provider.Claude, 
 	conversation := strings.Join(lines, "\n")
 	currentMemory := m.ReadMemory()
 
+	memSnippet := currentMemory
+	if memSnippet == "" {
+		memSnippet = "(empty)"
+	}
+
 	prompt := fmt.Sprintf(`You are a memory consolidation agent. Process this conversation and return a JSON object with exactly two keys:
 
 1. "history_entry": A paragraph (2-5 sentences) summarizing the key events/decisions/topics. Start with a timestamp like [%s].
@@ -102,12 +107,7 @@ func (m *MemoryStore) Consolidate(ctx context.Context, claude *provider.Claude, 
 
 Respond with ONLY valid JSON, no markdown fences.`,
 		time.Now().Format("2006-01-02 15:04"),
-		func() string {
-			if currentMemory == "" {
-				return "(empty)"
-			}
-			return currentMemory
-		}(),
+		memSnippet,
 		conversation,
 	)
 
@@ -115,7 +115,7 @@ Respond with ONLY valid JSON, no markdown fences.`,
 		{Role: "user", Content: prompt},
 	}, nil)
 	if err != nil {
-		log.Printf("[ERROR] memory consolidation failed: %v", err)
+		slog.Error("memory consolidation failed", "err", err)
 		return
 	}
 
@@ -128,15 +128,14 @@ Respond with ONLY valid JSON, no markdown fences.`,
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		log.Printf("[WARN] memory consolidation: empty response")
+		slog.Warn("memory consolidation: empty response")
 		return
 	}
 
 	// Strip possible markdown fences
 	if strings.HasPrefix(text, "```") {
-		parts := strings.SplitN(text, "\n", 2)
-		if len(parts) > 1 {
-			text = parts[1]
+		if _, after, ok := strings.Cut(text, "\n"); ok {
+			text = after
 		}
 		text = strings.TrimSuffix(text, "```")
 		text = strings.TrimSpace(text)
@@ -151,7 +150,7 @@ Respond with ONLY valid JSON, no markdown fences.`,
 		if len(preview) > 200 {
 			preview = preview[:200]
 		}
-		log.Printf("[WARN] memory consolidation: invalid JSON: %v; text=%s", err, preview)
+		slog.Warn("memory consolidation: invalid JSON", "err", err, "text", preview)
 		return
 	}
 	if result.HistoryEntry != "" {
@@ -161,5 +160,5 @@ Respond with ONLY valid JSON, no markdown fences.`,
 		_ = m.WriteMemory(result.MemoryUpdate)
 	}
 	session.LastConsolidated = end
-	log.Printf("[INFO] memory consolidation done; messages=%d last_consolidated=%d", len(session.Messages), session.LastConsolidated)
+	slog.Info("memory consolidation done", "messages", len(session.Messages), "last_consolidated", session.LastConsolidated)
 }

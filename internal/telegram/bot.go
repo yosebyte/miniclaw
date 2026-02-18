@@ -4,7 +4,7 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -40,7 +40,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		return fmt.Errorf("creating telegram bot: %w", err)
 	}
 	b.api = api
-	log.Printf("[INFO] telegram bot connected; username=%s", api.Self.UserName)
+	slog.Info("telegram bot connected", "username", api.Self.UserName)
 
 	cmds := tgbotapi.NewSetMyCommands(
 		tgbotapi.BotCommand{Command: "start", Description: "Start the bot"},
@@ -48,7 +48,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		tgbotapi.BotCommand{Command: "help", Description: "Show available commands"},
 	)
 	if _, err := api.Request(cmds); err != nil {
-		log.Printf("[WARN] could not set bot commands: %v", err)
+		slog.Warn("could not set bot commands", "err", err)
 	}
 
 	u := tgbotapi.NewUpdate(0)
@@ -81,7 +81,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	}
 
 	if !b.isAllowed(user) {
-		log.Printf("[WARN] message from unauthorised user; id=%d username=%s", user.ID, user.UserName)
+		slog.Warn("message from unauthorised user", "id", user.ID, "username", user.UserName)
 		return
 	}
 
@@ -98,13 +98,13 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	if len(preview) > 60 {
 		preview = preview[:60] + "..."
 	}
-	log.Printf("[INFO] message; from=%d chat=%d preview=%q", user.ID, chatID, preview)
+	slog.Info("message received", "from", user.ID, "chat", chatID, "preview", preview)
 
-	if strings.ToLower(strings.TrimSpace(text)) == "/start" {
+	if strings.EqualFold(strings.TrimSpace(text), "/start") {
 		reply := tgbotapi.NewMessage(chatID,
 			fmt.Sprintf("👋 Hi %s! I'm miniclaw.\n\nSend me a message and I'll respond!\nType /help to see available commands.", user.FirstName))
 		if _, err := b.api.Send(reply); err != nil {
-			log.Printf("[WARN] send error: %v", err)
+			slog.Warn("send error", "err", err)
 		}
 		return
 	}
@@ -123,7 +123,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	b.typing.Delete(chatID)
 
 	if err != nil {
-		log.Printf("[ERROR] agent error: %v", err)
+		slog.Error("agent error", "err", err)
 		response = "Sorry, I encountered an error: " + err.Error()
 	}
 
@@ -147,7 +147,7 @@ func (b *Bot) typingLoop(ctx context.Context, chatID int64) {
 func (b *Bot) sendTyping(chatID int64) {
 	action := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
 	if _, err := b.api.Request(action); err != nil {
-		log.Printf("[DEBUG] typing action failed: %v", err)
+		slog.Debug("typing action failed", "err", err)
 	}
 }
 
@@ -164,10 +164,10 @@ func (b *Bot) sendText(chatID int64, content string) {
 		m := tgbotapi.NewMessage(chatID, html)
 		m.ParseMode = tgbotapi.ModeHTML
 		if _, err := b.api.Send(m); err != nil {
-			log.Printf("[WARN] HTML send failed, falling back to plain: %v", err)
+			slog.Warn("HTML send failed, falling back to plain text", "err", err)
 			m2 := tgbotapi.NewMessage(chatID, chunk)
 			if _, err2 := b.api.Send(m2); err2 != nil {
-				log.Printf("[ERROR] send error: %v", err2)
+				slog.Error("send error", "err", err2)
 			}
 		}
 	}
